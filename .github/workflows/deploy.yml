@@ -1,110 +1,36 @@
-name: React CI/CD with Agentic Recovery
+name: React CI
 
 on:
   push:
     branches: [master]
-
-permissions:
-  contents: write
-  pull-requests: write
-  issues: write
-  actions: write
+  pull_request:
+    branches: [master]
 
 jobs:
-  build-test-deploy:
+  build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install
+
+      - name: Run tests
+        run: npm test -- --watchAll=false
 
       - name: Build
         run: npm run build
 
-      - name: Test
-        run: npm test -- --watchAll=false
-
-      - name: Write EC2 SSH key
-        run: |
-          echo "${{ secrets.EC2_SSH_KEY }}" > ec2_key.pem
-          chmod 600 ec2_key.pem
-
-      - name: Deploy build to EC2
-        env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_USERNAME: ${{ secrets.EC2_USERNAME }}
-        run: |
-          rsync -avz --delete -e "ssh -i ec2_key.pem -o StrictHostKeyChecking=no" \
-            build/ "$EC2_USERNAME@$EC2_HOST:/var/www/agentic-react-flow/"
-          ssh -i ec2_key.pem -o StrictHostKeyChecking=no "$EC2_USERNAME@$EC2_HOST" \
-            "sudo systemctl reload nginx"
-
-      - name: Health check
-        env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-        run: |
-          for i in 1 2 3 4 5; do
-            code=$(curl -s -o /dev/null -w "%{http_code}" "http://$EC2_HOST")
-            if [ "$code" = "200" ]; then
-              echo "Site healthy (HTTP $code)"
-              exit 0
-            fi
-            echo "Attempt $i: got HTTP $code, retrying..."
-            sleep 5
-          done
-          echo "Health check failed"
-          exit 1
-
-  ai-agent-recovery:
-    needs: build-test-deploy
-    if: failure()
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-      issues: write
-      actions: write
-    steps:
-      - uses: actions/checkout@v4
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
         with:
-          fetch-depth: 0
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Install node dependencies (needed for install/lint/prettier fixes)
-        run: npm ci
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install agent dependencies
-        run: pip install -r requirements.txt
-
-      - name: Write EC2 SSH key
-        run: |
-          echo "${{ secrets.EC2_SSH_KEY }}" > /tmp/ec2_key.pem
-          chmod 600 /tmp/ec2_key.pem
-
-      - name: Run AI recovery agent
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_RUN_ID: ${{ github.run_id }}
-          BASE_BRANCH: master
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_USERNAME: ${{ secrets.EC2_USERNAME }}
-          EC2_SSH_KEY_PATH: /tmp/ec2_key.pem
-          EC2_TARGET_DIR: /var/www/agentic-react-flow
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        run: python ai-agent/agent.py
+          name: react-build
+          path: build/
+          retention-days: 7
