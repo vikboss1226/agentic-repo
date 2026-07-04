@@ -1,8 +1,7 @@
 # Agentic React Flow
 
-A simple React app with a GitHub Actions CI pipeline. Right now the
-pipeline just installs, tests, and builds the app — no deployment, no AI.
-Those get added back in later once this baseline is solid.
+A simple React app with a GitHub Actions CI pipeline, plus a small AI
+agent that reacts when the build fails.
 
 ## What's in the app
 
@@ -13,29 +12,56 @@ just renders that component.
 
 ## CI pipeline (`.github/workflows/deploy.yml`)
 
-Runs on every push or PR to `master`:
+Runs on every push or PR to `main`:
 
 ```
-Checkout
-  ↓
-Install Node
-  ↓
-npm ci
-  ↓
-npm test
-  ↓
-npm run build
+Checkout → Install Node → npm install → npm test → npm run build → upload build artifact
 ```
 
-No secrets, no cloud provider, no AI step — just confirms the app installs,
-tests, and builds cleanly.
+If that `build` job fails, a second job, `ai-fix`, runs automatically.
+
+## The AI agent (`ai-agent/agent.py`)
+
+One file, kept deliberately simple:
+
+1. Pulls the log for whichever job failed, using the GitHub API.
+2. If the log points at a specific file under `src/` (e.g. `src/App.js`),
+   reads that file's actual current contents.
+3. Sends the log — and the file contents, if it found one — to OpenAI
+   (`gpt-4o-mini`) and asks it to diagnose the failure as JSON: a missing
+   npm package, a fixable code error, or "unknown" if it isn't confident.
+4. Acts on the diagnosis:
+   - **Missing package** → `npm install <package>` on a new branch.
+   - **Code error** → overwrites that one file with the model's corrected
+     version, on a new branch. It only ever touches the exact file it
+     already read — it can't invent a path to edit.
+   - **Unknown** → does nothing and just logs the reason.
+5. Either fix is pushed to a branch and opened as a PR back to `main`.
+
+The agent never commits to `main` directly. Every fix, code or dependency,
+lands as a PR a human reviews before merging. This means it can attempt
+real code fixes now, not just dependency installs — but it will bail out
+to "unknown" rather than guess at anything it isn't sure about.
+
+**Secret required:** `OPENAI_API_KEY` (add it under repo Settings → Secrets
+→ Actions). `GITHUB_TOKEN` is provided automatically by Actions.
+
+## Try it
+
+**Missing package:** remove `axios` from `package.json`'s dependencies
+while `CommentsTable.js` still imports it, then push to `main`. The build
+should fail on "Module not found: Can't resolve 'axios'", and you should
+see a `fix/install-axios-*` branch and PR appear.
+
+**Code error:** introduce an actual bug in `src/App.js` (e.g. a typo like
+`<div classNam="App">` or a missing closing tag) and push. The build
+should fail to compile, and `ai-fix` should open a `fix/code-*` branch and
+PR with a corrected version of the file for you to review.
 
 ## Planned next steps
 
-Once this is stable: reintroduce deployment (e.g. AWS EC2), then add back
-an AI agent that reads pipeline failures and reacts to them (fix-and-PR for
-code issues, direct action for infra issues). Deliberately not building
-those yet — getting the basic CI green first.
+Deployment (e.g. AWS EC2) and more failure types for the agent to handle
+come later, once this is solid.
 
 ---
 
