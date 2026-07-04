@@ -39,8 +39,12 @@ jobs:
           path: build/
           retention-days: 7
 
+  success:
+    needs: build
+    if: success()
+    runs-on: ubuntu-latest
+    steps:
       - name: Report success
-        if: success()
         run: echo "✅ Build generated successfully."
 
   ai-fix:
