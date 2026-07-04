@@ -102,6 +102,9 @@ def push_branch_and_pr(branch, commit_message, pr_title):
         "body": "Opened automatically by the AI agent after a failed build. Please review before merging.",
     }
     resp = requests.post(f"https://api.github.com/repos/{REPO}/pulls", headers=HEADERS, json=payload, timeout=30)
+    if not resp.ok:
+        # Print GitHub's actual reason instead of letting raise_for_status hide it.
+        print(f"GitHub API error creating PR ({resp.status_code}): {resp.text}")
     resp.raise_for_status()
     print("Opened PR:", resp.json()["html_url"])
 
