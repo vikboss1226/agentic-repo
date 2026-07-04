@@ -70,3 +70,12 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_RUN_ID: ${{ github.run_id }}
         run: python ai-agent/agent.py
+
+      - name: Upload agent report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-agent-report
+          path: ai-agent-report.html
+          if-no-files-found: ignore
+          retention-days: 7
