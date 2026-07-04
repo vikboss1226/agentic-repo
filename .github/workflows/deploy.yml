@@ -39,6 +39,10 @@ jobs:
           path: build/
           retention-days: 7
 
+      - name: Report success
+        if: success()
+        run: echo "✅ Build generated successfully."
+
   ai-fix:
     needs: build
     if: failure()
