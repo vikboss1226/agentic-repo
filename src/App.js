@@ -4,7 +4,7 @@ import CommentsTable from './components/CommentsTable';
 function App() {
   return (
     <div className="App">
-      <h1>Comments from JSONPlaceholder</h1>
+      <h1>Agentic CI Plan</h1>
       <CommentsTable />
     </div>
   );
