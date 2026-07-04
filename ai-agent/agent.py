@@ -81,7 +81,7 @@ CARD_TEMPLATE = """
 """
 
 
-def render_report(issues, applied, pr_url, pr_error):
+def render_report(issues, applied, failed, pr_url, pr_error):
     cards = ""
     if not issues:
         cards += CARD_TEMPLATE.format(title="No issues identified", pill="ok", detail="The AI did not find anything to diagnose in this log.")
@@ -124,6 +124,13 @@ def render_report(issues, applied, pr_url, pr_error):
             title="No changes made",
             pill="warn",
             detail="Nothing was confidently fixable, so nothing was changed. Check the build log manually.",
+        )
+
+    if failed:
+        outcome += CARD_TEMPLATE.format(
+            title=f"{len(failed)} attempted fix(es) failed and were skipped",
+            pill="bad",
+            detail="; ".join(failed) + ". These need a human to look at directly.",
         )
 
     html = REPORT_TEMPLATE.format(run_id=RUN_ID, issue_cards=cards, outcome_card=outcome)
@@ -187,7 +194,18 @@ def diagnose(log_text, files):
                     "Only use code_fix for a file whose current contents you were "
                     "actually given above - never invent a path. If you aren't "
                     "confident about a fix, report it as type unknown instead of "
-                    "guessing. If there is nothing to report, return an empty list."
+                    "guessing. If there is nothing to report, return an empty list.\n\n"
+                    "Important - distinguishing real failures from noise:\n"
+                    "- Lines starting with 'npm warn deprecated' are routine notices "
+                    "about transitive dependencies. They are never the cause of a "
+                    "failure and must never be reported as missing_package. Ignore them.\n"
+                    "- Only report missing_package when the log shows an actual "
+                    "resolution failure for code this project imports directly, e.g. "
+                    "'Cannot find module' or \"Module not found: Can't resolve\".\n"
+                    "- An 'ERESOLVE'/peer dependency conflict is NOT a missing package "
+                    "and must not be 'fixed' by installing the package named in the "
+                    "conflict. These require a human to decide how to resolve the "
+                    "version conflict - report these as type unknown."
                 ),
             },
             {"role": "user", "content": context},
@@ -221,20 +239,26 @@ def main():
         issues = diagnose(log_text, files)
 
         applied = []
+        failed = []
         for issue in issues:
             itype = issue.get("type")
+            try:
+                if itype == "missing_package" and issue.get("package"):
+                    package = issue["package"]
+                    print(f"Installing missing package: {package}")
+                    subprocess.run(["npm", "install", package, "--save"], check=True)
+                    applied.append(f"installed {package}")
 
-            if itype == "missing_package" and issue.get("package"):
-                package = issue["package"]
-                print(f"Installing missing package: {package}")
-                subprocess.run(["npm", "install", package, "--save"], check=True)
-                applied.append(f"installed {package}")
-
-            elif itype == "code_fix" and issue.get("file") in files and issue.get("fixed_code"):
-                print(f"Applying code fix to {issue['file']}")
-                with open(issue["file"], "w") as f:
-                    f.write(issue["fixed_code"])
-                applied.append(f"fixed {issue['file']}")
+                elif itype == "code_fix" and issue.get("file") in files and issue.get("fixed_code"):
+                    print(f"Applying code fix to {issue['file']}")
+                    with open(issue["file"], "w") as f:
+                        f.write(issue["fixed_code"])
+                    applied.append(f"fixed {issue['file']}")
+            except Exception as action_error:
+                # One bad action shouldn't take down the fixes that did work.
+                label = issue.get("package") or issue.get("file") or itype
+                print(f"Action failed for {label}: {action_error}")
+                failed.append(f"{label} ({action_error})")
 
         pr_url, pr_error = None, None
         if applied:
@@ -247,7 +271,7 @@ def main():
             )
             pr_url, pr_error = open_pull_request(branch, f"AI fix: {len(applied)} issue(s) from failed build", body)
 
-        render_report(issues, applied, pr_url, pr_error)
+        render_report(issues, applied, failed, pr_url, pr_error)
 
     except Exception as exc:
         with open(REPORT_PATH, "w") as f:
