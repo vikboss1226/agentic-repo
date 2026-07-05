@@ -214,6 +214,14 @@ def diagnose(log_text, files):
     return json.loads(response.choices[0].message.content).get("issues", [])
 
 
+def set_output(name, value):
+    """Write a step output so later jobs (e.g. the approval-gated deploy) can read it."""
+    output_file = os.environ.get("GITHUB_OUTPUT")
+    if output_file:
+        with open(output_file, "a") as f:
+            f.write(f"{name}={value}\n")
+
+
 def push_branch(branch, commit_message):
     subprocess.run(["git", "config", "user.name", "ai-agent"], check=True)
     subprocess.run(["git", "config", "user.email", "ai-agent@users.noreply.github.com"], check=True)
@@ -261,6 +269,7 @@ def main():
                 failed.append(f"{label} ({action_error})")
 
         pr_url, pr_error = None, None
+        branch = None
         if applied:
             branch = f"fix/ai-{int(time.time())}"
             push_branch(branch, "fix: AI agent - " + "; ".join(applied))
@@ -270,6 +279,9 @@ def main():
                 "\n\nPlease review before merging."
             )
             pr_url, pr_error = open_pull_request(branch, f"AI fix: {len(applied)} issue(s) from failed build", body)
+            # Let the workflow know a fix branch exists, so it can offer a
+            # manual-approval deploy of the fix without waiting for the PR to merge.
+            set_output("branch", branch)
 
         render_report(issues, applied, failed, pr_url, pr_error)
 
