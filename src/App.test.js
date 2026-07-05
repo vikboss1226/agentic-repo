@@ -1,8 +1,8 @@
 import { render, screen } from '@testing-library/react';
 import App from './App';
 
-test('renders the comments heading', () => {
+test('renders the app heading', () => {
   render(<App />);
-  const heading = screen.getByText(/comments from jsonplaceholder/i);
+  const heading = screen.getByText(/weather now/i);
   expect(heading).toBeInTheDocument();
 });

@@ -1,11 +1,10 @@
 import './App.css';
-import CommentsTable from './components/CommentsTable';
+import Weather from './components/Weather';
 
 function App() {
   return (
     <div className="App">
-      <h1>Agentic CI Plan - Muraly</h1>
-      <CommentsTable />
+      <Weather />
     </div>
   );
 }
