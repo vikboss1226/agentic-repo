@@ -39,13 +39,49 @@ jobs:
           path: build/
           retention-days: 7
 
-  success:
+  deploy:
     needs: build
-    if: success()
+    if: github.ref == 'refs/heads/main' && success()
     runs-on: ubuntu-latest
     steps:
-      - name: Report success
-        run: echo "✅ Build generated successfully."
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: react-build
+          path: build
+
+      - name: Copy build to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: ${{ secrets.EC2_SSH_PORT }}
+          source: 'build/*'
+          target: '/home/${{ secrets.EC2_USERNAME }}/app-build'
+          strip_components: 1
+
+      - name: Install nginx & publish build on EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: ${{ secrets.EC2_SSH_PORT }}
+          script: |
+            set -e
+
+            # Install nginx only if it isn't already there
+            if ! command -v nginx >/dev/null 2>&1; then
+              sudo apt-get update -y
+              sudo apt-get install -y nginx
+              sudo systemctl enable nginx
+            fi
+
+            # Publish the new build to nginx's web root
+            sudo rm -rf /var/www/html/*
+            sudo cp -r /home/${{ secrets.EC2_USERNAME }}/app-build/* /var/www/html/
+            sudo systemctl restart nginx
 
   ai-fix:
     needs: build
