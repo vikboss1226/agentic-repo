@@ -24,7 +24,7 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm install
+        run: npm install --legacy-peer-deps
 
       - name: Run tests
         run: npm test -- --watchAll=false
@@ -43,6 +43,7 @@ jobs:
     needs: build
     if: github.ref == 'refs/heads/main' && success()
     runs-on: ubuntu-latest
+    environment: dev # secrets EC2_HOST/EC2_USERNAME/EC2_SSH_KEY are scoped to this environment
     steps:
       - name: Download build artifact
         uses: actions/download-artifact@v4
@@ -50,38 +51,84 @@ jobs:
           name: react-build
           path: build
 
-      - name: Copy build to EC2
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USERNAME }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          port: ${{ secrets.EC2_SSH_PORT }}
-          source: 'build/*'
-          target: '/home/${{ secrets.EC2_USERNAME }}/app-build'
-          strip_components: 1
-
-      - name: Install nginx & publish build on EC2
+      - name: Provision EC2 (install & start Nginx if missing)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          port: ${{ secrets.EC2_SSH_PORT }}
+          port: ${{ secrets.EC2_SSH_PORT || 22 }}
           script: |
             set -e
-
-            # Install nginx only if it isn't already there
             if ! command -v nginx >/dev/null 2>&1; then
-              sudo apt-get update -y
-              sudo apt-get install -y nginx
-              sudo systemctl enable nginx
+              echo "Nginx not found, installing..."
+              if command -v dnf >/dev/null 2>&1; then
+                sudo dnf install -y nginx
+              elif command -v yum >/dev/null 2>&1; then
+                if command -v amazon-linux-extras >/dev/null 2>&1; then
+                  sudo amazon-linux-extras install -y nginx1
+                else
+                  sudo yum install -y nginx
+                fi
+              elif command -v apt-get >/dev/null 2>&1; then
+                sudo apt-get update -y
+                sudo apt-get install -y nginx
+              else
+                echo "ERROR: no supported package manager (dnf/yum/apt-get) found" >&2
+                exit 1
+              fi
+            else
+              echo "Nginx already installed, skipping install."
             fi
-
-            # Publish the new build to nginx's web root
-            sudo rm -rf /var/www/html/*
-            sudo cp -r /home/${{ secrets.EC2_USERNAME }}/app-build/* /var/www/html/
+            sudo mkdir -p /var/www/html
+            sudo chown -R ${{ secrets.EC2_USERNAME }}:${{ secrets.EC2_USERNAME }} /var/www/html
+            # Remove any stock default server block (Amazon Linux RPM: conf.d/default.conf,
+            # Debian/Ubuntu: sites-enabled/default) and replace with our own, so /var/www/html
+            # is always what gets served instead of the nginx welcome page.
+            sudo rm -f /etc/nginx/conf.d/default.conf /etc/nginx/sites-enabled/default
+            sudo mkdir -p /etc/nginx/conf.d
+            sudo tee /etc/nginx/conf.d/app.conf > /dev/null <<'NGINXCONF'
+            server {
+                listen 80 default_server;
+                server_name _;
+                root /var/www/html;
+                index index.html;
+                location / {
+                    try_files $uri /index.html;
+                }
+            }
+            NGINXCONF
+            if command -v ufw >/dev/null 2>&1; then
+              sudo ufw allow 'Nginx Full' || true
+            fi
+            sudo nginx -t
+            sudo systemctl enable nginx
             sudo systemctl restart nginx
+            sudo systemctl is-active --quiet nginx && echo "Nginx is running" || { echo "ERROR: nginx failed to start" >&2; exit 1; }
+
+      - name: Copy build files to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: ${{ secrets.EC2_SSH_PORT || 22 }}
+          source: 'build/*'
+          target: '/home/${{ secrets.EC2_USERNAME }}/app-deploy'
+          strip_components: 1
+
+      - name: Move files into Nginx web root and reload
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: ${{ secrets.EC2_SSH_PORT || 22 }}
+          script: |
+            sudo rm -rf /var/www/html/*
+            sudo cp -r /home/${{ secrets.EC2_USERNAME }}/app-deploy/* /var/www/html/
+            sudo systemctl reload nginx
+            rm -rf /home/${{ secrets.EC2_USERNAME }}/app-deploy
 
   ai-fix:
     needs: build
