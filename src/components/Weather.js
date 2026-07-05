@@ -84,7 +84,7 @@ function Weather() {
         <div className="city-search">
           <input
             type="text"
-            placeholder="Search a city..."
+            placeholder="Search a city......."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
